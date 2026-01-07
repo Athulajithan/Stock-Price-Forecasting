@@ -1,209 +1,210 @@
-📈 Apple Stock Price Forecasting System
+# 📈 Apple Stock Price Forecasting System
 
-An end-to-end interactive time series forecasting application built using Streamlit to forecast Apple Inc. (AAPL) stock prices.
+An end-to-end **interactive time series forecasting application** built using **Streamlit** to forecast **Apple Inc. (AAPL)** stock prices.
 
-The project demonstrates a complete data science workflow, combining statistical models, machine learning, and deep learning, along with EDA, hypothesis testing, auto-tuning, model diagnostics, and price forecasting.
+This project demonstrates a **complete data science workflow** using **statistical models, machine learning, and deep learning**, along with EDA, hypothesis testing, auto-tuning, evaluation, and price forecasting.
 
-🔍 Project Overview
+---
 
-This project implements a step-by-step forecasting pipeline:
+## 🔍 Project Overview
 
-📤 Data upload and preprocessing
+This project implements a structured, real-world forecasting pipeline:
 
-📊 Exploratory Data Analysis (EDA)
+- 📤 Data upload and preprocessing  
+- 📊 Exploratory Data Analysis (EDA)  
+- 📉 Statistical hypothesis testing  
+- 🤖 Model selection  
+- 🧠 Model training with diagnostics & auto-tuning  
+- 📈 Future stock price forecasting  
 
-📉 Statistical hypothesis testing
+The application is **interactive** and suitable for:
 
-🤖 Model selection (Statistical, ML & DL)
+- Academic projects  
+- Interviews & viva  
+- Data science / data analyst portfolios  
 
-🧠 Model training with diagnostics & auto-tuning
+---
 
-📈 Future stock price forecasting
+## 🔁 Forecasting Pipeline
 
-The application is fully interactive and suitable for:
+1. Upload stock price data  
+2. Perform Exploratory Data Analysis  
+3. Run statistical diagnostics  
+4. Select forecasting model  
+5. Train model with evaluation & auto-tuning  
+6. Generate future forecasts  
 
-Academic projects
+Each step must be completed sequentially.
 
-Interviews & viva
+---
 
-Data science / data analyst portfolios
-
-🔁 Forecasting Pipeline
-
-The system follows a controlled 6-step pipeline:
-
-Upload stock price data
-
-Exploratory Data Analysis
-
-Statistical diagnostics
-
-Model selection
-
-Model training & evaluation
-
-Forecast generation
-
-Each step must be completed sequentially to ensure correctness.
-
-📂 Dataset Requirements
+## 📂 Dataset Requirements
 
 The uploaded CSV file must contain:
 
-Column	Description
-Date	Trading date
-Close	Closing stock price
+| Column | Description |
+|------|-------------|
+| Date | Trading date |
+| Close | Closing stock price |
 
 The system automatically:
+- Cleans and parses dates
+- Sorts data chronologically
+- Computes daily percentage returns
 
-Parses and cleans dates
+---
 
-Sorts data chronologically
-
-Computes daily percentage returns
-
-📊 Exploratory Data Analysis (EDA)
+## 📊 Exploratory Data Analysis (EDA)
 
 EDA includes:
+- Closing price trend visualization  
+- Return distribution analysis  
+- 30-day rolling volatility  
+- Dataset duration and record count  
 
-Closing price trend visualization
+---
 
-Return distribution analysis
+## 📉 Statistical Hypothesis Testing
 
-30-day rolling volatility
+The following tests are performed before modeling:
 
-Dataset duration and record count
+- ADF Test – Stationarity  
+- Jarque–Bera Test – Normality  
+- Ljung–Box Test – Autocorrelation  
+- ARCH Test – Volatility clustering  
 
-These insights help understand trend, volatility, and risk behavior.
+ACF and PACF plots justify the use of **SARIMA, ML, and DL models**.
 
-📉 Statistical Hypothesis Testing
+---
 
-Before modeling, the following tests are performed:
+## 🤖 Models Used
 
-ADF Test – Stationarity check
+### SARIMA
+- Statistical time-series model
+- Captures autocorrelation structure
 
-Jarque–Bera Test – Normality test
+### Random Forest
+- Ensemble machine learning model
+- Detects nonlinear patterns
+- Supports auto hyperparameter tuning
 
-Ljung–Box Test – Autocorrelation detection
+### XGBoost
+- Gradient boosting model
+- High-performance structured learning
+- Auto-tuned using GridSearchCV
 
-ARCH Test – Volatility clustering
+### GRU
+- Recurrent neural network
+- Efficient for sequential data
 
-ACF and PACF plots are used to justify SARIMA and learning-based models.
+### LSTM
+- Advanced recurrent neural network
+- Captures long-term dependencies
+- Uses dropout for regularization
 
-🤖 Models Used
+All models are trained on **returns** to ensure stationarity.
 
-The system supports five forecasting models:
+---
 
-🔹 SARIMA
+## 🧠 Model Training & Evaluation
 
-Statistical time series model
+- 80% training / 20% testing split  
+- Metrics used:
+  - MAE (Mean Absolute Error)
+  - RMSE (Root Mean Squared Error)
+- Automatic detection of:
+  - Overfitting
+  - Underfitting
+- Auto hyperparameter tuning applied to:
+  - Random Forest
+  - XGBoost
 
-Captures autocorrelation structure
+---
 
-🔹 Random Forest
+## 💰 Price Forecasting Logic
 
-Ensemble machine learning model
+- Forecasted returns are converted back to prices
+- Uses:
+  - Last known closing price
+  - Recent mean returns
+  - Historical volatility
+  - Noise stabilization
+- Minimum price constraint applied
 
-Captures nonlinear patterns
+Both **return-based** and **price-based** error metrics are reported.
 
-Supports auto hyperparameter tuning
+---
 
-🔹 XGBoost
-
-Gradient boosting model
-
-Strong performance on structured data
-
-Auto-tuned using GridSearchCV
-
-🔹 GRU
-
-Deep learning recurrent neural network
-
-Efficient for sequential time-series data
-
-🔹 LSTM
-
-Advanced recurrent neural network
-
-Captures long-term temporal dependencies
-
-Includes dropout for regularization
-
-All models are trained on returns to ensure stationarity.
-
-🧠 Model Training & Auto-Tuning
-
-80% training / 20% testing split
-
-Evaluation metrics:
-
-MAE (Mean Absolute Error)
-
-RMSE (Root Mean Squared Error)
-
-Automatic detection of:
-
-Overfitting
-
-Underfitting
-
-Auto hyperparameter tuning applied to:
-
-Random Forest
-
-XGBoost (only when required)
-
-💰 Price Forecasting Logic
-
-Forecasted returns are converted back into prices
-
-Uses:
-
-Last known closing price
-
-Recent mean returns
-
-Historical volatility
-
-Noise stabilization
-
-Minimum price constraint applied
-
-Both return-based and price-based error metrics are reported.
-
-📈 Forecast Output
+## 📈 Forecast Output
 
 Users can view forecasts as:
+- Interactive line chart  
+- Tabular forecast values  
+- Combined chart and table  
 
-📊 Interactive line chart
+Final summary includes:
+- Train/Test MAE & RMSE (Returns)
+- MAE & RMSE (Prices)
+- Model fit status
 
-📋 Tabular forecast values
+---
 
-📊 + 📋 Combined view
+## 🛠️ Tech Stack
 
-A final summary displays:
+- Python  
+- Streamlit  
+- Pandas, NumPy  
+- Plotly, Matplotlib  
+- Scikit-learn  
+- Statsmodels  
+- XGBoost  
+- TensorFlow / Keras  
 
-Train/Test MAE & RMSE (Returns)
+---
 
-MAE & RMSE (Prices)
+## 📁 Project Structure
 
-Model fit status
+```
+apple-stock-forecasting/
+│
+├── app.py
+├── requirements.txt
+├── README.md
+└── data.csv (uploaded by user)
+```
 
-🛠️ Tech Stack
+---
 
-Python
+## ⚙️ Installation & Run Locally
 
-Streamlit
+```
+git clone https://github.com/your-username/apple-stock-forecasting.git
+cd apple-stock-forecasting
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-Pandas, NumPy
+---
 
-Plotly, Matplotlib
+## 🎯 Use Cases
 
-Scikit-learn
+- Data Analyst portfolio project  
+- Data Science interview demonstration  
+- Time series forecasting showcase  
+- Streamlit deployment example  
 
-Statsmodels
+---
 
-XGBoost
+## ⚠️ Disclaimer
 
-TensorFlow / Keras
+This project is for **educational and analytical purposes only**.  
+Forecasts are **not financial advice**.
+
+---
+
+## 👤 Author
+
+Athul N A  
+Thrissur, Kerala, India  
+Email: athulajithan039@gmail.com  
+GitHub: https://github.com/Athulajithan  
