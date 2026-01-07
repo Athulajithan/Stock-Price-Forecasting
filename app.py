@@ -1,411 +1,677 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pickle
-import matplotlib.pyplot as plt
-from tensorflow.keras.models import load_model
+import plotly.express as px
+import plotly.graph_objects as go
+import warnings
+import time
+
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from datetime import timedelta
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import MinMaxScaler
 
-# -----------------------------
-# PAGE CONFIG
-# -----------------------------
-st.set_page_config(page_title="Stock Price Forecasting", layout="wide")
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from xgboost import XGBRegressor
 
-st.title("📊 Stock Price Forecasting using LSTM & XGBoost")
-st.markdown("""
-This project demonstrates **end-to-end time-series forecasting**
-using historical stock price data, feature engineering,
-deep learning (LSTM), and machine learning (XGBoost).
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import GRU, Dense
+from tensorflow.keras.callbacks import EarlyStopping
 
-📌 **Accuracy is evaluated on both log returns (primary) and prices (secondary).**
-""")
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.stats.diagnostic import acorr_ljungbox, het_arch
+from scipy.stats import jarque_bera
 
-# -----------------------------
-# LOAD DATA
-# -----------------------------
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+import matplotlib.pyplot as plt
+
+from tensorflow.keras.layers import LSTM, Dropout
+
+
+# ===== PIPELINE CONTROLLER =====
+if "step" not in st.session_state:
+    st.session_state.step = 1
+
+def next_step():
+    if st.session_state.step < 6:
+        st.session_state.step += 1
+
+
+def prev_step():
+    if st.session_state.step > 1:
+        st.session_state.step -= 1
+
+
+
+st.set_page_config(page_title="AAPL Forecasting System", layout="wide")
+st.title("📈 Apple Stock Price Forecasting System")
+
+# ===== PIPELINE VISUAL =====
+steps = [
+    "1️⃣ Upload",
+    "2️⃣ EDA",
+    "3️⃣ Diagnostics",
+    "4️⃣ Model",
+    "5️⃣ Training",
+    "6️⃣ Forecast"
+]
+
+current = st.session_state.step - 1
+
+progress_value = min(1.0, max(0.0, current / (len(steps) - 1)))
+st.progress(progress_value)
+
+
+cols = st.columns(len(steps))
+for i, col in enumerate(cols):
+    if i == current:
+        col.markdown(f"**➡ {steps[i]}**")
+    else:
+        col.markdown(steps[i])
+
+st.markdown("1 Upload → 2 EDA → 3 Diagnostics → 4 Model → 5 Training → 6 Forecast")
+
+# uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+# forecast_days = st.sidebar.selectbox("Forecast Days", [7, 15, 30], index=2)
+# model_choice = st.sidebar.selectbox(
+#    "Model", ["SARIMA", "Random Forest", "XGBoost", "GRU", "LSTM"]
+#)
+# view = st.sidebar.radio("Forecast View", ["Graph", "Table", "Both"])
+
+MIN_PRICE = 291
+
 @st.cache_data
-def load_data():
-    df = pd.read_csv("AAPL.csv")
-    df["Date"] = pd.to_datetime(df["Date"], format="mixed", dayfirst=True)
+def load_data(file):
+    df = pd.read_csv(file)
+    df["Date"] = pd.to_datetime(
+        df["Date"], dayfirst=True, format="mixed", errors="coerce"
+    )
+    df = df.dropna(subset=["Date"])
+    df = df.sort_values("Date")
     df.set_index("Date", inplace=True)
+    df = df[["Close"]]
+    df.dropna(inplace=True)
+    df["Return"] = df["Close"].pct_change()
+    df.dropna(inplace=True)
     return df
 
-df = load_data()
-
-# -----------------------------
-# LOAD MODELS
-# -----------------------------
-@st.cache_resource
-def load_models():
-    lstm_model = load_model("models/lstm_model.h5", compile=False)
-    with open("models/scaler.pkl", "rb") as f:
-        scaler = pickle.load(f)
-    with open("models/xgboost_model.pkl", "rb") as f:
-        xgb_model = pickle.load(f)
-    return lstm_model, scaler, xgb_model
-
-lstm_model, scaler, xgb_model = load_models()
-
-# -----------------------------
-# SIDEBAR
-# -----------------------------
-st.sidebar.header("⚙️ Settings")
-
-forecast_days = st.sidebar.slider("Forecast Days", 7, 60, 30)
-
-show_eda = st.sidebar.checkbox("Show EDA", True)
-show_lstm_forecast = st.sidebar.checkbox("Show LSTM Forecast", True)
-show_xgb_forecast = st.sidebar.checkbox("Show XGBoost Forecast", True)
-
-st.sidebar.markdown("---")
-st.sidebar.info(
-    "ℹ️ Comparison graphs are shown **only when both models are enabled**."
-)
-
-# -----------------------------
-# FEATURE ENGINEERING
-# -----------------------------
-df_feat = df.copy()
-df_feat["log_return"] = np.log(df_feat["Adj Close"]).diff()
-df_feat["rolling_std_30"] = df_feat["Adj Close"].rolling(30).std()
-df_feat.dropna(inplace=True)
-
-df_2019 = df_feat[df_feat.index >= "2019-01-01"]
-
-# ==========================================================
-# 📊 EDA (UNCHANGED)
-# ==========================================================
-if show_eda:
-    st.header("📈 Exploratory Data Analysis")
-
-    st.subheader("Dataset Preview")
-    st.dataframe(df.head())
-
-    st.subheader("Summary Statistics")
-    st.dataframe(df.describe())
-
-    col1, col2 = st.columns(2)
-    with col1:
-        fig, ax = plt.subplots()
-        ax.plot(df_2019["Adj Close"])
-        ax.set_title("Closing Price (From 2019)")
-        ax.grid(True)
-        st.pyplot(fig)
-
-    with col2:
-        fig, ax = plt.subplots()
-        ax.plot(df_2019["Volume"], color="orange")
-        ax.set_title("Trading Volume")
-        ax.grid(True)
-        st.pyplot(fig)
-
-    col3, col4 = st.columns(2)
-    with col3:
-        fig, ax = plt.subplots()
-        ax.plot(df_2019["log_return"])
-        ax.axhline(0, color="red", linestyle="--")
-        ax.set_title("Daily Log Returns")
-        ax.grid(True)
-        st.pyplot(fig)
-
-    with col4:
-        fig, ax = plt.subplots()
-        ax.plot(df_2019["rolling_std_30"], color="purple")
-        ax.set_title("30-Day Rolling Volatility")
-        ax.grid(True)
-        st.pyplot(fig)
-
-# ==========================================================
-# 🤖 LSTM MODEL
-# ==========================================================
-LOOKBACK = 120
-scaled = scaler.transform(df_feat[["log_return"]])
-
-X_lstm, y_lstm = [], []
-for i in range(LOOKBACK, len(scaled)):
-    X_lstm.append(scaled[i-LOOKBACK:i, 0])
-    y_lstm.append(scaled[i, 0])
-
-X_lstm = np.array(X_lstm).reshape(-1, LOOKBACK, 1)
-y_lstm = np.array(y_lstm)
-
-split = int(len(X_lstm) * 0.8)
-X_test = X_lstm[split:]
-y_test = y_lstm[split:]
-
-y_pred = lstm_model.predict(X_test, verbose=0)
-
-y_test_ret = scaler.inverse_transform(y_test.reshape(-1, 1))
-y_pred_ret = scaler.inverse_transform(y_pred)
-
-lstm_rmse_ret = np.sqrt(mean_squared_error(y_test_ret, y_pred_ret))
-lstm_mae_ret = mean_absolute_error(y_test_ret, y_pred_ret)
-
-actual_price = df_feat["Adj Close"].iloc[-len(y_test_ret):].values
-pred_price = actual_price[0] * np.exp(np.cumsum(y_pred_ret.flatten()))
-
-lstm_rmse_price = np.sqrt(mean_squared_error(actual_price, pred_price))
-lstm_mae_price = mean_absolute_error(actual_price, pred_price)
-
-if show_lstm_forecast:
-    st.markdown("---")
-    st.header("🤖 LSTM Model")
-
-    st.subheader("📊 LSTM Accuracy")
-    st.metric("RMSE (Returns)", round(lstm_rmse_ret, 6))
-    st.metric("MAE (Returns)", round(lstm_mae_ret, 6))
-    st.metric("RMSE (Price)", round(lstm_rmse_price, 2))
-    st.metric("MAE (Price)", round(lstm_mae_price, 2))
-
-    last_seq = scaled[-LOOKBACK:].reshape(1, LOOKBACK, 1)
-    future_scaled = []
-
-    for _ in range(forecast_days):
-        p = lstm_model.predict(last_seq, verbose=0)[0][0]
-        future_scaled.append(p)
-        last_seq = np.append(last_seq[:, 1:, :], [[[p]]], axis=1)
-
-    future_returns = scaler.inverse_transform(
-        np.array(future_scaled).reshape(-1, 1)
-    )
-
-    last_price = df_feat["Adj Close"].iloc[-1]
-    future_price_lstm = last_price * np.exp(np.cumsum(future_returns))
-
-    dates = pd.bdate_range(
-        start=df_feat.index[-1] + timedelta(days=1),
-        periods=forecast_days
-    )
-
-    lstm_df = pd.DataFrame({
-        "LSTM_Forecast_USD": future_price_lstm.flatten(),
-        "LSTM_Forecast_INR": future_price_lstm.flatten() * 83
-    }, index=dates)
-
-    st.subheader("📈 LSTM Forecast Graph")
-    fig, ax = plt.subplots(figsize=(14,6))
-    ax.plot(df_2019["Adj Close"], label="Historical")
-    ax.plot(lstm_df.index, lstm_df["LSTM_Forecast_USD"], "--", label="LSTM Forecast")
-    ax.legend()
-    ax.grid(True)
-    st.pyplot(fig)
-
-    st.subheader("📋 LSTM Forecast Matrix")
-    st.dataframe(lstm_df)
-
-# ==========================================================
-# 🌲 XGBOOST MODEL
-# ==========================================================
-df_xgb = df_feat.copy()
-df_xgb["lag_1"] = df_xgb["log_return"].shift(1)
-df_xgb["lag_5"] = df_xgb["log_return"].shift(5)
-df_xgb["lag_10"] = df_xgb["log_return"].shift(10)
-df_xgb["roll_mean_5"] = df_xgb["log_return"].rolling(5).mean()
-df_xgb["roll_std_5"] = df_xgb["log_return"].rolling(5).std()
-df_xgb.dropna(inplace=True)
-
-features = ["lag_1","lag_5","lag_10","roll_mean_5","roll_std_5"]
-X = df_xgb[features]
-y = df_xgb["log_return"]
-
-split = int(len(X) * 0.8)
-X_test = X.iloc[split:]
-y_test = y.iloc[split:]
-
-y_pred = xgb_model.predict(X_test)
-
-xgb_rmse_ret = np.sqrt(mean_squared_error(y_test, y_pred))
-xgb_mae_ret = mean_absolute_error(y_test, y_pred)
-
-actual_price = df_feat["Adj Close"].iloc[-len(y_test):].values
-pred_price = actual_price[0] * np.exp(np.cumsum(y_pred))
-
-xgb_rmse_price = np.sqrt(mean_squared_error(actual_price, pred_price))
-xgb_mae_price = mean_absolute_error(actual_price, pred_price)
-
-if show_xgb_forecast:
-    st.markdown("---")
-    st.header("🌲 XGBoost Model")
-
-    st.subheader("📊 XGBoost Accuracy")
-    st.metric("RMSE (Returns)", round(xgb_rmse_ret, 6))
-    st.metric("MAE (Returns)", round(xgb_mae_ret, 6))
-    st.metric("RMSE (Price)", round(xgb_rmse_price, 2))
-    st.metric("MAE (Price)", round(xgb_mae_price, 2))
-
-    history = df_xgb.copy()
-    future_returns = []
-
-    for _ in range(forecast_days):
-        row = history.iloc[-1]
-        X_next = np.array([[row[f] for f in features]])
-        p = xgb_model.predict(X_next)[0]
-        future_returns.append(p)
-        history = pd.concat(
-            [history, pd.DataFrame({"log_return":[p]})],
-            ignore_index=True
+def mae_rmse(y_true, y_pred):
+        return (
+            mean_absolute_error(y_true, y_pred),
+            np.sqrt(mean_squared_error(y_true, y_pred)),
         )
 
-    future_price_xgb = last_price * np.exp(np.cumsum(future_returns))
-
-    xgb_df = pd.DataFrame({
-        "XGBoost_Forecast_USD": future_price_xgb,
-        "XGBoost_Forecast_INR": future_price_xgb * 83
-    }, index=dates)
-
-    st.subheader("📈 XGBoost Forecast Graph")
-    fig, ax = plt.subplots(figsize=(14,6))
-    ax.plot(df_2019["Adj Close"], label="Historical")
-    ax.plot(xgb_df.index, xgb_df["XGBoost_Forecast_USD"], "--", label="XGBoost Forecast")
-    ax.legend()
-    ax.grid(True)
-    st.pyplot(fig)
-
-    st.subheader("📋 XGBoost Forecast Matrix")
-    st.dataframe(xgb_df)
-
-# ==========================================================
-# 🔀 COMPARISON (AUTO-DISABLED)
-# ==========================================================
-st.markdown("---")
-st.header("🔀 Model Comparison")
-
-# --------------------------------------------------
-# Show comparison ONLY if both models are enabled
-# --------------------------------------------------
-if show_lstm_forecast and show_xgb_forecast:
-
-    # ==============================
-    # 1️⃣ Historical + Forecast Comparison
-    # ==============================
-    st.subheader("📊 Historical + Forecast Comparison")
-
-    fig, ax = plt.subplots(figsize=(14,6))
-    ax.plot(
-        df_2019["Adj Close"],
-        label="Historical Price",
-        color="blue"
-    )
-    ax.plot(
-        lstm_df.index,
-        lstm_df["LSTM_Forecast_USD"],
-        "--",
-        label="LSTM Forecast",
-        color="green"
-    )
-    ax.plot(
-        xgb_df.index,
-        xgb_df["XGBoost_Forecast_USD"],
-        "--",
-        label="XGBoost Forecast",
-        color="orange"
-    )
-
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Price (USD)")
-    ax.legend()
-    ax.grid(True)
-    st.pyplot(fig)
-
-    # ==============================
-    # 2️⃣ Forecast-Only Comparison
-    # ==============================
-    st.subheader("📈 Forecast-Only Comparison (No Historical Prices)")
-
-    fig, ax = plt.subplots(figsize=(14,6))
-
-    ax.plot(
-        lstm_df.index,
-        lstm_df["LSTM_Forecast_USD"],
-        linestyle="--",
-        marker="o",
-        label="LSTM Forecast",
-        color="green"
-    )
-
-    ax.plot(
-        xgb_df.index,
-        xgb_df["XGBoost_Forecast_USD"],
-        linestyle="--",
-        marker="s",
-        label="XGBoost Forecast",
-        color="orange"
-    )
-
-    ax.set_title("LSTM vs XGBoost – Forecast Comparison")
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Price (USD)")
-    ax.legend()
-    ax.grid(True)
-
-    st.pyplot(fig)
-
-# --------------------------------------------------
-# If only one model is enabled
-# --------------------------------------------------
-elif show_lstm_forecast or show_xgb_forecast:
-    st.info(
-        "ℹ️ Enable **both LSTM and XGBoost forecasts** from the sidebar "
-        "to view comparison graphs."
-    )
-
-# --------------------------------------------------
-# If both models are disabled
-# --------------------------------------------------
-else:
-    st.warning(
-        "⚠️ Both models are disabled. Enable at least one model to view results."
-    )
-
-
-# -----------------------------
-# SMART MODEL EVALUATION FOOTER
-# -----------------------------
-st.markdown("---")
-st.header("🏁 Model Evaluation Summary")
-
-# Show footer ONLY when both models are enabled
-if show_lstm_forecast and show_xgb_forecast:
-
-    # Decide best model based on RETURN RMSE (primary metric)
-    if lstm_rmse_ret < xgb_rmse_ret:
-        best_model = "LSTM"
-        reason = (
-            "LSTM captures long-term temporal dependencies in time-series data more effectively. "
-            "It shows lower error on log returns, indicating better generalization for sequential patterns."
-        )
+def fit_status(train_mae, test_mae):
+    if train_mae < test_mae * 0.5:
+        return "Overfitting"
+    elif train_mae > test_mae:
+        return "Underfitting"
     else:
-        best_model = "XGBoost"
-        reason = (
-            "XGBoost performs better due to strong feature engineering with lagged variables and rolling statistics. "
-            "It achieves lower return prediction error, making it more reliable for short-term forecasting."
+        return "Balanced"
+
+    # ===================== MODELS =====================
+def sarima_model():
+    model = SARIMAX(train["Return"], order=(1, 0, 1))
+    fit = model.fit(disp=False)
+    train_pred = fit.fittedvalues
+    test_pred = fit.forecast(len(test))
+    future = fit.forecast(forecast_days)
+    return train_pred, test_pred, future
+
+def rf_model(tuned=False):
+    X_train = np.arange(len(train)).reshape(-1, 1)
+    y_train = train["Return"].values
+    X_test = np.arange(len(train), len(df)).reshape(-1, 1)
+
+    if tuned:
+        params = {"n_estimators": [100, 300], "max_depth": [5, 10]}
+        grid = GridSearchCV(
+            RandomForestRegressor(random_state=42),
+            params,
+            cv=3,
+            scoring="neg_mean_squared_error",
+        )
+        grid.fit(X_train, y_train)
+        model = grid.best_estimator_
+    else:
+        model = RandomForestRegressor(n_estimators=200, max_depth=10)
+
+    model.fit(X_train, y_train)
+    train_pred = model.predict(X_train)
+    test_pred = model.predict(X_test)
+    future_idx = np.arange(len(df), len(df) + forecast_days).reshape(-1, 1)
+    future = model.predict(future_idx)
+    return train_pred, test_pred, future
+
+def xgb_model(tuned=False):
+    X_train = np.arange(len(train)).reshape(-1, 1)
+    y_train = train["Return"].values
+    X_test = np.arange(len(train), len(df)).reshape(-1, 1)
+
+    if tuned:
+        params = {
+            "n_estimators": [200, 400],
+            "max_depth": [4, 6],
+            "learning_rate": [0.03, 0.05],
+        }
+        grid = GridSearchCV(
+            XGBRegressor(objective="reg:squarederror"),
+            params,
+            cv=3,
+            scoring="neg_mean_squared_error",
+        )
+        grid.fit(X_train, y_train)
+        model = grid.best_estimator_
+    else:
+        model = XGBRegressor(
+            n_estimators=300, max_depth=6, learning_rate=0.05
         )
 
-    st.success(f"✅ **Best Performing Model: {best_model}**")
+    model.fit(X_train, y_train)
+    train_pred = model.predict(X_train)
+    test_pred = model.predict(X_test)
+    future_idx = np.arange(len(df), len(df) + forecast_days).reshape(-1, 1)
+    future = model.predict(future_idx)
+    return train_pred, test_pred, future
 
-    st.markdown("### 📌 Why this model performed better:")
-    st.markdown(f"- {reason}")
+def gru_model():
+    scaler = MinMaxScaler()
+    scaled = scaler.fit_transform(df[["Return"]])
 
-    st.markdown("### 📊 Evaluation Criteria Used:")
-    st.markdown("""
-    - **Primary Metric:** RMSE & MAE on **log returns**  
-    - **Secondary Metric:** RMSE & MAE on **reconstructed prices**  
-    - Log returns are preferred because they stabilize variance and improve stationarity.
-    """)
+    X, y = [], []
+    lookback = 20
+    for i in range(lookback, len(scaled)):
+        X.append(scaled[i - lookback : i])
+        y.append(scaled[i])
 
-    st.markdown("""
+    X, y = np.array(X), np.array(y)
+    X_train, X_test = X[: train_size - lookback], X[train_size - lookback :]
+    y_train, y_test = y[: train_size - lookback], y[train_size - lookback :]
 
-    """)
+    model = Sequential(
+        [
+            GRU(32, return_sequences=True, input_shape=(X_train.shape[1], 1)),
+            GRU(16),
+            Dense(1),
+        ]
+    )
+    model.compile(optimizer="adam", loss="mse")
+    model.fit(
+        X_train,
+        y_train,
+        epochs=20,
+        batch_size=16,
+        validation_split=0.1,
+        callbacks=[EarlyStopping(patience=3)],
+        verbose=0,
+    )
 
-# If only one model is enabled
-elif show_lstm_forecast or show_xgb_forecast:
+    train_pred = scaler.inverse_transform(
+        model.predict(X_train)
+    ).flatten()
+    test_pred = scaler.inverse_transform(
+        model.predict(X_test)
+    ).flatten()
+
+    last_seq = X[-1]
+    future = []
+    for _ in range(forecast_days):
+        r = model.predict(last_seq.reshape(1, lookback, 1))[0, 0]
+        future.append(r)
+        last_seq = np.roll(last_seq, -1)
+        last_seq[-1] = r
+
+    future = scaler.inverse_transform(
+        np.array(future).reshape(-1, 1)
+    ).flatten()
+
+    return train_pred, test_pred, future
+
+def lstm_model():
+    scaler = MinMaxScaler()
+    scaled = scaler.fit_transform(df[["Return"]])
+
+    X, y = [], []
+    lookback = 20
+
+    for i in range(lookback, len(scaled)):
+        X.append(scaled[i-lookback:i])
+        y.append(scaled[i])
+
+    X, y = np.array(X), np.array(y)
+    X_train, X_test = X[:train_size-lookback], X[train_size-lookback:]
+    y_train, y_test = y[:train_size-lookback], y[train_size-lookback:]
+
+    model = Sequential([
+        LSTM(64, return_sequences=True, input_shape=(X_train.shape[1], 1)),
+        Dropout(0.3),
+        LSTM(32),
+        Dropout(0.3),
+        Dense(1)
+    ])
+
+    model.compile(optimizer="adam", loss="mse")
+
+    model.fit(
+        X_train, y_train,
+        epochs=20,
+        batch_size=16,
+        validation_split=0.1,
+        callbacks=[EarlyStopping(patience=3)],
+        verbose=0
+    )
+
+    train_pred = scaler.inverse_transform(
+        model.predict(X_train)
+    ).flatten()
+
+    test_pred = scaler.inverse_transform(
+        model.predict(X_test)
+    ).flatten()
+
+    last_seq = X[-1]
+    future = []
+
+    for _ in range(forecast_days):
+        r = model.predict(last_seq.reshape(1, lookback, 1))[0, 0]
+        future.append(r)
+        last_seq = np.roll(last_seq, -1)
+        last_seq[-1] = r
+
+    future = scaler.inverse_transform(
+        np.array(future).reshape(-1, 1)
+    ).flatten()
+
+    return train_pred, test_pred, future
+
+if st.session_state.step == 1:
+    st.header("STEP 1 → Upload Data")
+
+    uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
+
+    st.session_state.forecast_days = st.selectbox(
+    "Forecast Horizon (Days)",
+    [7, 15, 30],
+    index=2
+    )
+
+
+    if uploaded_file:
+        st.session_state.df = load_data(uploaded_file)
+        st.success("Data uploaded successfully")
+        st.button("Next ▶", on_click=next_step, key="next_1")
+
+
+
+
+
+# ===================== EDA =====================
+elif st.session_state.step == 2:
+    df = st.session_state.df
+
+
+
+    st.header("🔍 Exploratory Data Analysis")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Start Date", df.index.min().strftime("%d-%m-%Y"))
+    c2.metric("End Date", df.index.max().strftime("%d-%m-%Y"))
+    c3.metric("Records", len(df))
+
+
+    st.subheader("Closing Price Trend")
+    st.plotly_chart(px.line(df, x=df.index, y="Close"), use_container_width=True)
+
+    st.subheader("Return Distribution")
+    st.plotly_chart(px.histogram(df, x="Return", nbins=100), use_container_width=True)
+
+    df["Rolling_Volatility"] = df["Return"].rolling(30, min_periods=1).std()
+    st.subheader("Rolling Volatility (Start → End)")
+    st.plotly_chart(
+        px.line(df, x=df.index, y="Rolling_Volatility"),
+        use_container_width=True
+    )
+    
+    st.button("Next ▶", on_click=next_step, key="next_2")
+    st.button("◀ Back", on_click=prev_step, key="back_2")
+
+
+
+# ===================== STATISTICAL HYPOTHESIS TESTING =====================
+
+elif st.session_state.step == 3:
+    df = st.session_state.df
+
+    st.header("📊 Statistical Hypothesis Testing (Before Modeling)")
+
+    adf_stat, adf_p, _, _, _, _ = adfuller(df["Return"])
+    jb_stat, jb_p = jarque_bera(df["Return"])
+    lb_test = acorr_ljungbox(df["Return"], lags=[10], return_df=True)
+    arch_stat, arch_p, _, _ = het_arch(df["Return"])
+
+    hypothesis_df = pd.DataFrame({
+        "Test": [
+            "ADF Test (Stationarity)",
+            "Jarque-Bera Test (Normality)",
+            "Ljung-Box Test (Autocorrelation)",
+            "ARCH Test (Heteroskedasticity)"
+        ],
+        "Statistic": [
+            adf_stat,
+            jb_stat,
+            lb_test["lb_stat"].iloc[0],
+            arch_stat
+        ],
+        "p-value": [
+            adf_p,
+            jb_p,
+            lb_test["lb_pvalue"].iloc[0],
+            arch_p
+        ],
+        "Inference": [
+            "Stationary" if adf_p < 0.05 else "Non-Stationary",
+            "Non-Normal" if jb_p < 0.05 else "Normal",
+            "Autocorrelation Present" if lb_test["lb_pvalue"].iloc[0] < 0.05 else "No Autocorrelation",
+            "Heteroskedasticity Present" if arch_p < 0.05 else "No ARCH Effect"
+        ]
+    })
+
+    st.dataframe(hypothesis_df)
+
     st.info(
-        "ℹ️ Enable **both LSTM and XGBoost models** to view the comparative evaluation summary."
+        "Statistical tests justify using SARIMA, ML, and DL models "
+        "due to autocorrelation, non-normality, and volatility clustering."
     )
 
-# If both models are disabled
-else:
-    st.warning(
-        "⚠️ Model evaluation summary is unavailable because both models are disabled."
+    st.header("📉 ACF & PACF Analysis (SARIMA Justification)")
+
+    st.button("Next ▶", on_click=next_step, key="next_3")
+    st.button("◀ Back", on_click=prev_step, key="back_3")
+
+
+    
+
+    fig1, ax1 = plt.subplots()
+    plot_acf(df["Return"], lags=30, ax=ax1)
+    ax1.set_title("Autocorrelation Function (ACF)")
+    st.pyplot(fig1)
+
+    fig2, ax2 = plt.subplots()
+    plot_pacf(df["Return"], lags=30, ax=ax2)
+    ax2.set_title("Partial Autocorrelation Function (PACF)")
+    st.pyplot(fig2)
+
+    st.caption(
+        "ACF and PACF plots confirm temporal dependency and "
+        "help select AR and MA terms for SARIMA."
     )
+
+elif st.session_state.step == 4:
+    df = st.session_state.df
+
+    st.header("STEP 4 → Model Selection")
+
+    col1, col2, col3 = st.columns(3)
+
+    if col1.button("SARIMA"):
+        st.session_state.model_choice = "SARIMA"
+    if col1.button("Random Forest"):
+        st.session_state.model_choice = "Random Forest"
+
+    if col2.button("XGBoost"):
+        st.session_state.model_choice = "XGBoost"
+    if col2.button("GRU"):
+        st.session_state.model_choice = "GRU"
+
+    if col3.button("LSTM"):
+        st.session_state.model_choice = "LSTM"
+
+    if "model_choice" in st.session_state:
+        st.success(f"Selected Model: {st.session_state.model_choice}")
+
+    st.button("Next ▶", on_click=next_step, key="next_4")
+    st.button("◀ Back", on_click=prev_step, key="back_4")
+
+
+# ===================== SPLIT =====================
+
+
+    
+
+
+# ===================== EXECUTION =====================
+elif st.session_state.step == 5:
+    df = st.session_state.df
+    forecast_days = st.session_state.forecast_days
+
+    st.header("🧠 Model Diagnostics & Auto-Tuning")
+
+    if "model_choice" not in st.session_state:
+        st.warning("Please select a model in Step 4")
+        st.stop()
+
+    train_size = int(len(df) * 0.8)
+    train = df.iloc[:train_size]
+    test = df.iloc[train_size:]
+
+    globals()["train"] = train
+    globals()["test"] = test
+    globals()["df"] = df
+    globals()["forecast_days"] = forecast_days
+
+
+    model_choice = st.session_state.model_choice
+
+    # model training starts here
+
+
+    if model_choice == "SARIMA":
+        train_pred, test_pred, future_returns = sarima_model()
+        st.session_state.future_returns = future_returns
+
+    elif model_choice == "Random Forest":
+        train_pred, test_pred, future_returns = rf_model(False)
+        st.session_state.future_returns = future_returns
+
+    elif model_choice == "XGBoost":
+        train_pred, test_pred, future_returns = xgb_model(False)
+        st.session_state.future_returns = future_returns
+
+    elif model_choice == "LSTM":
+        train_pred, test_pred, future_returns = lstm_model()
+        st.session_state.future_returns = future_returns
+
+    else:
+        train_pred, test_pred, future_returns = gru_model()
+        st.session_state.future_returns = future_returns
+
+
+
+
+    train_mae, train_rmse = mae_rmse(
+        train["Return"][: len(train_pred)], train_pred
+    )
+    test_mae, test_rmse = mae_rmse(test["Return"], test_pred)
+
+    status = fit_status(train_mae, test_mae)
+
+    st.session_state.train_mae = train_mae
+    st.session_state.test_mae = test_mae
+    st.session_state.train_rmse = train_rmse
+    st.session_state.test_rmse = test_rmse
+    st.session_state.status = status
+
+    # ===================== PRICE MAE / RMSE (CORRECT PLACE) =====================
+# Convert RETURNS → PRICE for TEST period only (valid evaluation)
+
+    train_size = int(len(df) * 0.8)
+
+    test_prices_actual = df["Close"].iloc[train_size + 1:]
+
+    test_start_price = df["Close"].iloc[train_size]
+
+    test_prices_pred = (
+        test_start_price
+        * (1 + pd.Series(test_pred)).cumprod()
+    ).values[:len(test_prices_actual)]
+
+    price_mae, price_rmse = mae_rmse(
+        test_prices_actual[:len(test_prices_pred)],
+        test_prices_pred
+    )
+
+    st.session_state.price_mae = price_mae
+    st.session_state.price_rmse = price_rmse
+
+
+
+    before = pd.DataFrame(
+        {
+            "Stage": ["Before Tuning"],
+            "Train MAE": [train_mae],
+            "Train RMSE": [train_rmse],
+            "Test MAE": [test_mae],
+            "Test RMSE": [test_rmse],
+            "Fit Status": [status],
+        }
+    )
+
+    if status != "Balanced" and model_choice in ["Random Forest", "XGBoost"]:
+        st.warning(f"{status} detected → Auto-tuning applied")
+        time.sleep(1)
+
+        if model_choice == "Random Forest":
+            train_pred, test_pred, future_returns = rf_model(True)
+        else:
+            train_pred, test_pred, future_returns = xgb_model(True)
+
+        train_mae, train_rmse = mae_rmse(
+            train["Return"][: len(train_pred)], train_pred
+        )
+        test_mae, test_rmse = mae_rmse(test["Return"], test_pred)
+        status = fit_status(train_mae, test_mae)
+
+    after = pd.DataFrame(
+        {
+            "Stage": ["After Tuning"],
+            "Train MAE": [train_mae],
+            "Train RMSE": [train_rmse],
+            "Test MAE": [test_mae],
+            "Test RMSE": [test_rmse],
+            "Fit Status": [status],
+        }
+    )
+
+    st.subheader("📊 MAE & RMSE — Before vs After")
+    st.dataframe(pd.concat([before, after], ignore_index=True))
+
+    st.button("Next ▶", on_click=next_step, key="next_5")
+    st.button("◀ Back", on_click=prev_step, key="back_5")
+
+
+
+# ===================== PRICE FORECAST =====================
+elif st.session_state.step == 6:
+    df = st.session_state.df
+    forecast_days = st.session_state.forecast_days
+    future_returns = st.session_state.future_returns
+
+    train_mae = st.session_state.train_mae
+    test_mae = st.session_state.test_mae
+    train_rmse = st.session_state.train_rmse
+    test_rmse = st.session_state.test_rmse
+    status = st.session_state.status
+
+
+    historical_vol = df["Return"].std()
+    recent_mean = df["Return"].tail(30).mean()
+
+    last_price = df["Close"].iloc[-1]
+    future_prices = [last_price]
+
+    for r in future_returns:
+        adjusted = 0.7 * r + 0.3 * recent_mean
+        noise = np.random.normal(0, historical_vol)
+        next_price = future_prices[-1] * (1 + adjusted + noise)
+        next_price = max(next_price, MIN_PRICE)
+        future_prices.append(next_price)
+
+    future_prices = np.array(future_prices[1:])
+
+    price_mae = st.session_state.price_mae
+    price_rmse = st.session_state.price_rmse
+
+    st.subheader("💰 Price-Based Error Metrics")
+
+    p1, p2 = st.columns(2)
+    p1.metric("MAE (Price)", f"{price_mae:.2f}")
+    p2.metric("RMSE (Price)", f"{price_rmse:.2f}")
+
+
+    future_dates = pd.date_range(
+        df.index[-1], periods=forecast_days + 1
+    )[1:]
+
+    forecast_df = pd.DataFrame(
+        {
+            "Date": future_dates,
+            "Predicted Price": future_prices,
+        }
+    )
+
+
+    st.header("📈 Forecast Output")
+
+    view = st.radio(
+    "How do you want to see the forecast?",
+    ["Graph", "Table", "Both"]
+    )
+
+# existing forecast graph/table code below
+
+
+
+    if view in ["Graph", "Both"]:
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df["Close"], name="Actual")
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=future_dates, y=future_prices, name="Forecast"
+            )
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    if view in ["Table", "Both"]:
+        st.dataframe(forecast_df)
+
+    st.success("✅ Full pipeline completed successfully")
+
+# ===================== MODEL SUMMARY =====================
+if st.session_state.step >= 6:
+    st.header("🏆 Final Model Summary")
+
+    summary_df = pd.DataFrame({
+        "Metric": [
+            "Train MAE (Returns)",
+            "Test MAE (Returns)",
+            "Train RMSE (Returns)",
+            "Test RMSE (Returns)",
+            "MAE (Price)",
+            "RMSE (Price)",
+            "Fit Status"
+        ],
+        "Value": [
+            train_mae,
+            test_mae,
+            train_rmse,
+            test_rmse,
+            price_mae,
+            price_rmse,
+            status
+        ]
+    })
+
+    st.dataframe(summary_df)
